@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "tsx src/server.ts",
+    "start": "npm run db:init && tsx src/server.ts",
+    "db:init": "tsx src/seed.ts",
     "dev": "tsx watch src/server.ts",
     "test": "NODE_ENV=test tsx --test src/tests/delivery.test.ts",
     "mock": "tsx src/mock-customer.ts",

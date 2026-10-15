@@ -1,10 +1,12 @@
 import { createApp } from './app.js';
+import { startMockCustomerServer } from './mock-customer.js';
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 const DB_PATH = process.env.DB_PATH || 'webhooks.db';
 
 const { app, store, dispatcher } = createApp({ dbPath: DB_PATH });
 
+const mockServer = startMockCustomerServer();
 dispatcher.start();
 
 const server = app.listen(PORT, () => {
@@ -30,16 +32,25 @@ const shutdown = () => {
   isShuttingDown = true;
   console.log('\nShutting down gracefully...');
   dispatcher.stop();
+  if (typeof mockServer.closeAllConnections === 'function') {
+    mockServer.closeAllConnections();
+  }
 
   if (typeof server.closeAllConnections === 'function') {
     server.closeAllConnections();
   }
 
-  server.close(() => {
-    store.close();
-    console.log('Server and database closed. Bye!');
-    process.exit(0);
-  });
+  let closedServers = 0;
+  const finish = () => {
+    closedServers++;
+    if (closedServers === 2) {
+      store.close();
+      console.log('Servers and database closed. Bye!');
+      process.exit(0);
+    }
+  };
+  server.close(finish);
+  mockServer.close(finish);
 
   // Safety fallback: if keep-alive connections hang, exit promptly
   setTimeout(() => {

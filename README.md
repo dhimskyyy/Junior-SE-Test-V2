@@ -1,119 +1,93 @@
 # Reliable Webhook Delivery Service
 
-A robust, fault-tolerant webhook delivery service built with **TypeScript**, **Node.js**, and **SQLite**. It reliably ingests events from internal producers and guarantees delivery to customer HTTP endpoints with exponential backoff, per-customer concurrency isolation, dead-letter recovery, and cryptographic HMAC SHA-256 payload signing.
+## One-line run command
 
----
-
-## ⚡ Quick Start (One-Line Run Command)
+From the project directory, install dependencies and start everything in one terminal:
 
 ```bash
-npm start
+npm install && npm start
 ```
-*The service will start on `http://localhost:3000` with an embedded SQLite datastore (`webhooks.db`).*
 
----
+This command idempotently initializes `webhooks.db`, seeds the five customer scenarios, starts the Mock Customer Server on port `4000`, starts the queue worker, and starts the REST API on port `3000`.
 
-## 🧪 Quick Verification & Demos
+The seeded customers are:
 
-| Command | Description |
-| :--- | :--- |
-| **`npm run demo`** | **Recommended!** Runs the interactive end-to-end demonstration showcasing healthy delivery, retries, terminal failure, and dead-letter replay. |
-| **`npm test`** | Executes the automated test suite (`src/tests/delivery.test.ts`) covering all failure cases. |
-| **`npm run mock`** | Starts the mock customer receiver server on `http://localhost:4000` (success, flaky, slow, down endpoints). |
+| Customer | Mock behavior |
+| --- | --- |
+| `cust_healthy` | Always returns HTTP 200 |
+| `cust_slow` | Responds after 6 seconds and exercises timeout/retry |
+| `cust_failing_500` | Always returns HTTP 500 |
+| `cust_fatal_404` | Always returns HTTP 404 |
+| `cust_flaky` | Returns HTTP 503 twice, then HTTP 200 |
 
----
+Run `npm run db:init` at any time to initialize/seed again safely. Existing customer subscriptions are updated rather than duplicated.
 
-## 🏗️ Architecture Overview
+## One-line automated test command
+
+```bash
+npm test
+```
+
+This runs the complete hermetic delivery test suite from start to finish and prints the result in the terminal.
+
+## Copy-paste API examples
+
+Send an event to each scenario (each command prints an `event.id` in the response):
+
+```bash
+curl -sS -X POST http://localhost:3000/api/events -H 'Content-Type: application/json' -d '{"customerId":"cust_healthy","eventType":"order.created","payload":{"orderId":"ORD-healthy"}}'
+curl -sS -X POST http://localhost:3000/api/events -H 'Content-Type: application/json' -d '{"customerId":"cust_slow","eventType":"order.created","payload":{"orderId":"ORD-slow"}}'
+curl -sS -X POST http://localhost:3000/api/events -H 'Content-Type: application/json' -d '{"customerId":"cust_failing_500","eventType":"order.created","payload":{"orderId":"ORD-500"}}'
+curl -sS -X POST http://localhost:3000/api/events -H 'Content-Type: application/json' -d '{"customerId":"cust_fatal_404","eventType":"order.created","payload":{"orderId":"ORD-404"}}'
+curl -sS -X POST http://localhost:3000/api/events -H 'Content-Type: application/json' -d '{"customerId":"cust_flaky","eventType":"order.created","payload":{"orderId":"ORD-flaky"}}'
+```
+
+Check an event by replacing `evt_ID_FROM_POST_RESPONSE` with the returned ID:
+
+```bash
+curl -sS http://localhost:3000/api/events/evt_ID_FROM_POST_RESPONSE
+```
+
+Other useful commands:
+
+```bash
+curl -sS http://localhost:3000/api/health
+curl -sS http://localhost:4000/webhook/received
+curl -sS -X POST http://localhost:4000/webhook/reset
+```
+
+## Architecture
 
 ```mermaid
 flowchart LR
-    Producer["Internal Producer"] -->|POST /api/events| API["Express REST API"]
-    API -->|Atomic Insert| DB[(SQLite WAL Mode)]
-    Scheduler["Dispatcher Loop"] -->|Poll Due Events| DB
-    Scheduler -->|Fair Concurrency Filter| Worker["Delivery Worker Pool"]
-    Worker -->|POST with HMAC Signature| Customer["Customer Endpoint"]
-    Customer -.->|HTTP 2xx (Success)| Delivered["Mark Delivered"]
-    Customer -.->|HTTP 5xx / Timeout (Fail)| Retry["Exponential Backoff + Jitter"]
-    Retry -->|Max Attempts Reached| DLQ["Mark FAILED (Dead-Letter)"]
+    Producer["Internal Producer"] -->|POST /api/events| API["Main Webhook Server :3000"]
+    API --> DB[(SQLite)]
+    Worker["Queue Worker / Dispatcher"] --> DB
+    Worker --> Mock["Mock Customer Server :4000"]
 ```
 
-### Key Architectural Highlights:
-1. **At-Least-Once Delivery:** Events are safely stored in SQLite before acknowledgement. Each delivery includes `X-Webhook-ID`, `X-Webhook-Timestamp`, and `X-Webhook-Sequence` headers so customers can implement idempotent processing.
-2. **Exponential Backoff with Jitter:** Configurable retry delays with randomized jitter to prevent the thundering herd problem.
-3. **Fair Queuing & Outage Protection:** Limits concurrent requests per customer (`maxConcurrentPerCustomer = 2`) to prevent Head-of-Line blocking. An outage on Customer A never starves Customer B.
-4. **Dead-Letter Queue & Manual Replay:** Unrecoverable events transition to `failed` and can be inspected or re-delivered via `POST /api/events/:id/retry`.
+- `src/server.ts` launches the API, queue worker, and mock server in one process/terminal.
+- `src/seed.ts` initializes the schema and seeds subscriptions using idempotent upserts.
+- `src/tests/delivery.test.ts` covers successful delivery, retries, terminal failures, replay, signing, and sequence numbers.
 
----
+## Clean ZIP for email
 
-## 📁 Repository Structure
+Run this one-line command from the project directory. It excludes `node_modules`, `.git`, the assignment PDF, databases, and local transcript/archive files:
 
-```
-.
-├── DECISIONS.md             # In-depth justification of 4 core design decisions
-├── AI_REFLECTION.md         # Reflection on AI-assisted workflow and learnings
-├── Junior SE Test V2.pdf    # Original assignment prompt
-├── package.json             # NPM scripts and dependencies
-├── tsconfig.json            # TypeScript configuration
-└── src/
-    ├── types.ts             # Domain models and configuration interfaces
-    ├── crypto.ts            # HMAC SHA-256 signing and verification helpers
-    ├── db.ts                # SQLite database repository and queries
-    ├── dispatcher.ts        # Concurrency-controlled fair queue & retry engine
-    ├── api.ts               # Express API router (subscriptions & events)
-    ├── app.ts               # Express application factory
-    ├── server.ts            # Main runnable server entrypoint
-    ├── mock-customer.ts     # Mock customer receiver server
-    ├── demo.ts              # End-to-end live demonstration script
-    └── tests/
-        └── delivery.test.ts # Automated integration test suite
-```
-
----
-
-## 📡 API Reference & Examples
-
-### 1. Register a Customer Webhook Endpoint
 ```bash
-curl -X POST http://localhost:3000/api/subscriptions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "customerId": "cust_123",
-    "endpointUrl": "http://localhost:4000/webhook/success"
-  }'
+zip -r ../junior-se-test-v2.zip . -x 'node_modules/*' '.git/*' 'Junior SE Test V2.pdf' '*.db' '*.db-*' 'conversation.zip' 'ai_transcript.jsonl' '*.DS_Store'
 ```
 
-### 2. Ingest an Event (Internal Producer)
-```bash
-curl -X POST http://localhost:3000/api/events \
-  -H "Content-Type: application/json" \
-  -d '{
-    "customerId": "cust_123",
-    "eventType": "order.completed",
-    "payload": {
-      "orderId": "ORD-999",
-      "amount": 250000,
-      "currency": "IDR"
-    }
-  }'
+## Repository structure
+
+```text
+src/
+  api.ts             REST API routes
+  app.ts             Express application factory
+  db.ts              SQLite schema and repository
+  dispatcher.ts      Queue worker, retries, and concurrency
+  mock-customer.ts   Mock customer receiver
+  seed.ts            Idempotent schema initialization and seed data
+  server.ts          Single-command runtime entrypoint
+  tests/             Automated tests
 ```
-
-### 3. Check Event Delivery Status & Attempt History
-```bash
-curl http://localhost:3000/api/events/evt_YOUR_EVENT_ID
-```
-
-### 4. Manually Replay a Failed Event
-```bash
-curl -X POST http://localhost:3000/api/events/evt_YOUR_EVENT_ID/retry
-```
-
-### 5. Check Service Health & Metrics
-```bash
-curl http://localhost:3000/api/health
-```
-
----
-
-## 📄 Submission Documents
-* [DECISIONS.md](DECISIONS.md) - Analysis of Delivery Semantics, Retry Behavior, Long Outages, and Ordering.
-* [AI_REFLECTION.md](AI_REFLECTION.md) - AI-assisted workflow, prompting strategy, and challenges.

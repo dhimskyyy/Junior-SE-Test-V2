@@ -74,6 +74,13 @@ app.post('/webhook/failing', (req: Request, res: Response) => {
   res.status(500).json({ error: 'Endpoint Internal Server Error (Always fails)' });
 });
 
+// 4. Fatal endpoint: Always returns 404 and is not retryable in a real customer setup
+app.post('/webhook/fatal-404', (req: Request, res: Response) => {
+  const eventId = req.headers['x-webhook-id'] as string;
+  console.log(`[MockCustomer] ❌ /webhook/fatal-404 rejected event ${eventId} with 404`);
+  res.status(404).json({ error: 'Endpoint Not Found (Simulated fatal failure)' });
+});
+
 // 4. Slow endpoint: Takes 6000ms to respond (triggers client timeout)
 app.post('/webhook/slow', async (req: Request, res: Response) => {
   console.log('[MockCustomer] ⏳ /webhook/slow hanging for 6s...');
@@ -93,33 +100,38 @@ app.post('/webhook/reset', (_req: Request, res: Response) => {
   res.json({ message: 'State reset successfully' });
 });
 
-const PORT = process.env.MOCK_PORT ? parseInt(process.env.MOCK_PORT, 10) : 4000;
-const server = app.listen(PORT, () => {
-  console.log(`
+export function startMockCustomerServer(port = process.env.MOCK_PORT ? parseInt(process.env.MOCK_PORT, 10) : 4000) {
+  const server = app.listen(port, () => {
+    console.log(`
 =============================================================
-🤖 Mock Customer Receiver is running on http://localhost:${PORT}
+🤖 Mock Customer Receiver is running on http://localhost:${port}
 =============================================================
 Available mock endpoints:
   POST /webhook/success  - Always returns 200 OK
   POST /webhook/flaky    - Fails 2x with 503, then returns 200 on 3rd attempt
   POST /webhook/failing  - Always returns 500 Internal Error
+  POST /webhook/fatal-404 - Always returns 404 Not Found
   POST /webhook/slow     - Hangs for 6s (tests timeout)
   GET  /webhook/received - Inspect received webhooks
   POST /webhook/reset    - Reset flaky counter and logs
 =============================================================
 `);
-});
-
-const shutdownMock = () => {
-  console.log('\nShutting down mock receiver...');
-  if (typeof server.closeAllConnections === 'function') {
-    server.closeAllConnections();
-  }
-  server.close(() => {
-    process.exit(0);
   });
-  setTimeout(() => process.exit(0), 500).unref();
-};
 
-process.on('SIGINT', shutdownMock);
-process.on('SIGTERM', shutdownMock);
+  return server;
+}
+
+if (require.main === module) {
+  const server = startMockCustomerServer();
+  const shutdownMock = () => {
+    console.log('\nShutting down mock receiver...');
+    if (typeof server.closeAllConnections === 'function') {
+      server.closeAllConnections();
+    }
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 500).unref();
+  };
+
+  process.on('SIGINT', shutdownMock);
+  process.on('SIGTERM', shutdownMock);
+}
